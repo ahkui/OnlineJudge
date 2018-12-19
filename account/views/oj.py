@@ -434,3 +434,46 @@ class SSOAPI(CSRFExemptAPIView):
         except User.DoesNotExist:
             return self.error("User does not exist")
         return self.success({"username": user.username, "avatar": user.userprofile.avatar, "admin_type": user.admin_type})
+
+from django.http import HttpResponsePermanentRedirect
+import requests, json
+import re
+from ..models import ProblemPermission
+class FCUNIDLogin(CSRFExemptAPIView):
+    def post(self, request):
+        """
+        FCU NID login
+        https://opendata.fcu.edu.tw/fcuapi/api/GetLoginUser?client_id=XXXXX&user_code=XXXXX
+        https://opendata.fcu.edu.tw/fcuapi/api/GetUserInfo?client_id=XXXXX&user_code=XXXXX
+        https://opendata.fcu.edu.tw/fcuapi/api/GetStuInfo?client_id=XXXXX&id=XXXXX&user_code=XXXXX
+        """
+        data = request.data
+        if data["status"] == "200" :
+            r = requests.session()
+            login_res = r.get("https://opendata.fcu.edu.tw/fcuapi/api/GetLoginUser?client_id=636807490159.9994c060e9394bc5bd83128ca99d44ae.oj.fcu.edu.tw&user_code="+data["user_code"])
+            login_data = json.loads(login_res.text)
+            login_user = login_data["UserInfo"][0] if len(login_data["UserInfo"]) > 0 else None
+            if login_user["status"] == "1":
+                user_res = r.get("https://opendata.fcu.edu.tw/fcuapi/api/GetUserInfo?client_id=636807490159.9994c060e9394bc5bd83128ca99d44ae.oj.fcu.edu.tw&user_code="+data["user_code"])
+                user_data = json.loads(user_res.text)
+                user_info = user_data["UserInfo"][0] if len(user_data["UserInfo"]) > 0 and user_data["UserInfo"][0] != "" else None
+                if user_info:
+                    user_nid = user_info["id"].lower()
+                    user_nid = user_nid.replace(" ", "")
+                    user_realname = user_info["name"]
+                    user_major = user_info["unit_name"]
+                    user = None
+                    if User.objects.filter(username=user_nid).exists():
+                        user = User.objects.get(username=user_nid)
+                    elif User.objects.filter(username=user_nid.upper()).exists():
+                        user = User.objects.get(username=user_nid.upper())
+                    else:
+                        if user_nid[0] in ['m','t']:
+                            user = User.objects.create(username=user_nid, email="{}@o365.fcu.edu.tw".format(user_nid), admin_type=AdminType.ADMIN, problem_permission=ProblemPermission.OWN)
+                        else:
+                            user = User.objects.create(username=user_nid, email="{}@o365.fcu.edu.tw".format(user_nid))
+                        user.set_password(user_nid+user_nid)
+                        user.save()
+                        UserProfile.objects.create(user=user, real_name=user_realname, school="............", major=user_major)
+                    auth.login(request, user)
+        return HttpResponsePermanentRedirect("/")
